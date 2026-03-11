@@ -1,0 +1,56 @@
+{
+  "name": "vult-lsp",
+  "displayName": "Vult LSP",
+  "description": "Language Server for the Vult DSP language",
+  "version": "1.0.0",
+  "publisher": "vult",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "out/extension.js",
+  "activationEvents": [
+    "onLanguage:vult"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "vult",
+        "aliases": [
+          "Vult",
+          "vult"
+        ],
+        "extensions": [
+          ".vult"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "vult",
+        "scopeName": "source.vult",
+        "path": "./syntaxes/vult.tmLanguage.json"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "tsc",
+    "watch": "tsc -w",
+    "postinstall": "cd .. && echo 'Postinstall'"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1",
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.12",
+    "vultlib": "^0.4.15"
+  },
+  "devDependencies": {
+    "@types/node": "^25.4.0",
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.9.3"
+  }
+}

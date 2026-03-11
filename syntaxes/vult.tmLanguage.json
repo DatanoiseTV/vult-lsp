@@ -1,0 +1,96 @@
+{
+  "name": "Vult",
+  "scopeName": "source.vult",
+  "patterns": [
+    {
+      "name": "meta.function.source.vult",
+      "match": "(fun|and|external)\\s+([a-zA-Z_]\\w*)",
+      "captures": {
+        "1": {
+          "name": "keyword.control.source.vult"
+        },
+        "2": {
+          "name": "entity.name.function.source.vult"
+        }
+      }
+    },
+    {
+      "name": "keyword.source.vult",
+      "match": "\\b(fun|val|mem|return|if|else|while|then|type|table|external)\\b"
+    },
+    {
+      "name": "constant.numeric.source.vult",
+      "match": "\\b((([0-9]+\\.?[0-9]*)|(\\.[0-9]+))((e|E)(\\+|-)?[0-9]+)?)\\b"
+    },
+    {
+      "name": "storage.type.source.vult",
+      "match": "\\b(int|real|num|bool)\\b"
+    },
+    {
+      "name": "storage.type.source.vult",
+      "match": "\\b([a-zA-Z_]\\w*)\\b(\\()",
+      "captures": {
+        "1": {
+          "name": "storage.type.source.vult"
+        },
+        "2": {
+          "name": "constant.character.source.vult"
+        }
+      }
+    },
+    {
+      "name": "comment.line.double-slash.source.vult",
+      "match": "(//).*$\\n?"
+    },
+    {
+      "name": "string.quoted.double.source.vult",
+      "begin": "\"",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.source.vult"
+        }
+      },
+      "end": "\"",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.source.vult"
+        }
+      },
+      "patterns": [
+        {
+          "name": "constant.character.escape.source.vult",
+          "match": "\\\\."
+        }
+      ]
+    },
+    {
+      "name": "comment.block.source.vult",
+      "begin": "/\\*",
+      "beginCaptures": {
+        "0": {
+          "name": "comment.block.begin.source.vult"
+        }
+      },
+      "end": "\\*/",
+      "endCaptures": {
+        "0": {
+          "name": "comment.block.end.source.vult"
+        }
+      },
+      "patterns": [
+        {
+          "name": "constant.character.escape.source.vult",
+          "match": "\\\\."
+        }
+      ]
+    },
+    {
+      "name": "constant.character.source.vult",
+      "match": "(=|:|;|&lt;|&gt;|,|!=|\\+|\\*|/|-|\\||&|\\(|\\)|{|})"
+    },
+    {
+      "name": "constant.language.source.vult",
+      "match": "(true|false)"
+    }
+  ]
+}
