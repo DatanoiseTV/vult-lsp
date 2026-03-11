@@ -1,0 +1,43 @@
+name: Build and Release VSIX
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Triggers when a new version tag is pushed (e.g. v1.0.0)
+  workflow_dispatch:  # Allows manual triggering from GitHub UI
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install VSCE
+        run: npm install -g @vscode/vsce
+
+      - name: Build VSIX
+        run: vsce package
+
+      - name: Get VSIX filename
+        id: get_vsix
+        run: |
+          VSIX_FILE=$(ls *.vsix)
+          echo "filename=$VSIX_FILE" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: ${{ steps.get_vsix.outputs.filename }}
+          generate_release_notes: true
