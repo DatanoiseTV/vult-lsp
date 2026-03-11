@@ -483,6 +483,7 @@ connection.onDocumentFormatting((params: DocumentFormattingParams): TextEdit[] =
     const formattedLines: string[] = [];
     let indentLevel = 0;
     let inBlockComment = false;
+    let consecutiveEmptyLines = 0;
     const tabSize = params.options.tabSize;
     const insertSpaces = params.options.insertSpaces;
     const indentChar = insertSpaces ? ' '.repeat(tabSize) : '\t';
@@ -491,39 +492,54 @@ connection.onDocumentFormatting((params: DocumentFormattingParams): TextEdit[] =
         let line = lines[i].trim();
 
         if (line === '') {
-            formattedLines.push('');
+            consecutiveEmptyLines++;
+            if (consecutiveEmptyLines <= 1 && formattedLines.length > 0) {
+                formattedLines.push('');
+            }
             continue;
         }
+        consecutiveEmptyLines = 0;
 
-        let cleanLine = line;
-
-        if (inBlockComment) {
-            let endIdx = cleanLine.indexOf('*/');
-            if (endIdx !== -1) {
-                inBlockComment = false;
-                cleanLine = cleanLine.substring(endIdx + 2);
-            } else {
-                cleanLine = '';
-            }
-        }
-
-        if (!inBlockComment) {
-            cleanLine = cleanLine.replace(/\/\/.*$/, '');
-            cleanLine = cleanLine.replace(/"(?:[^"\\]|\\.)*"/g, '');
-
-            while (cleanLine.indexOf('/*') !== -1) {
-                let startIdx = cleanLine.indexOf('/*');
-                let endIdx = cleanLine.indexOf('*/', startIdx + 2);
-                if (endIdx !== -1) {
-                    cleanLine = cleanLine.substring(0, startIdx) + cleanLine.substring(endIdx + 2);
+        let cleanLine = "";
+        let j = 0;
+        let lineLength = line.length;
+        
+        let lineStartsInBlockComment = inBlockComment;
+        
+        while (j < lineLength) {
+            if (inBlockComment) {
+                if (line[j] === '*' && line[j+1] === '/') {
+                    inBlockComment = false;
+                    j += 2;
                 } else {
+                    j++;
+                }
+            } else {
+                if (line[j] === '/' && line[j+1] === '/') {
+                    break; // ignore rest of line
+                } else if (line[j] === '/' && line[j+1] === '*') {
                     inBlockComment = true;
-                    cleanLine = cleanLine.substring(0, startIdx);
-                    break;
+                    j += 2;
+                } else if (line[j] === '"') {
+                    // Skip string
+                    j++;
+                    while (j < lineLength) {
+                        if (line[j] === '\\') {
+                            j += 2;
+                        } else if (line[j] === '"') {
+                            j++;
+                            break;
+                        } else {
+                            j++;
+                        }
+                    }
+                } else {
+                    cleanLine += line[j];
+                    j++;
                 }
             }
         }
-
+        
         cleanLine = cleanLine.trim();
         
         let opens = (cleanLine.match(/\{/g) || []).length;
@@ -532,14 +548,14 @@ connection.onDocumentFormatting((params: DocumentFormattingParams): TextEdit[] =
         const startsWithClose = /^\}/.test(cleanLine);
         
         let currentIndent = indentLevel;
-        if (startsWithClose) {
+        if (startsWithClose && !lineStartsInBlockComment) {
             currentIndent = Math.max(0, currentIndent - 1);
             closes--; 
         }
 
         let newText = (currentIndent > 0 ? indentChar.repeat(currentIndent) : '') + line;
         
-        if (inBlockComment && line.startsWith('*')) {
+        if (lineStartsInBlockComment && line.startsWith('*')) {
             newText = ' ' + newText;
         }
 
@@ -549,7 +565,11 @@ connection.onDocumentFormatting((params: DocumentFormattingParams): TextEdit[] =
         indentLevel = Math.max(0, indentLevel);
     }
 
-    const finalCode = formattedLines.join('\n');
+    while (formattedLines.length > 0 && formattedLines[formattedLines.length - 1] === '') {
+        formattedLines.pop();
+    }
+
+    const finalCode = formattedLines.join('\n') + '\n';
     if (finalCode === docText) {
         return [];
     }
