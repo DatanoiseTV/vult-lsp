@@ -480,7 +480,7 @@ connection.onDocumentFormatting((params: DocumentFormattingParams): TextEdit[] =
     if (!docText) return [];
 
     const lines = docText.split(/\r?\n/);
-    const edits: TextEdit[] = [];
+    const formattedLines: string[] = [];
     let indentLevel = 0;
     let inBlockComment = false;
     const tabSize = params.options.tabSize;
@@ -491,15 +491,7 @@ connection.onDocumentFormatting((params: DocumentFormattingParams): TextEdit[] =
         let line = lines[i].trim();
 
         if (line === '') {
-            if (lines[i].length > 0) {
-                edits.push({
-                    range: {
-                        start: { line: i, character: 0 },
-                        end: { line: i, character: lines[i].length }
-                    },
-                    newText: ''
-                });
-            }
+            formattedLines.push('');
             continue;
         }
 
@@ -537,7 +529,7 @@ connection.onDocumentFormatting((params: DocumentFormattingParams): TextEdit[] =
         let opens = (cleanLine.match(/\{/g) || []).length;
         let closes = (cleanLine.match(/\}/g) || []).length;
 
-        const startsWithClose = /^[}\]]/.test(cleanLine);
+        const startsWithClose = /^\}/.test(cleanLine);
         
         let currentIndent = indentLevel;
         if (startsWithClose) {
@@ -551,21 +543,24 @@ connection.onDocumentFormatting((params: DocumentFormattingParams): TextEdit[] =
             newText = ' ' + newText;
         }
 
-        if (lines[i] !== newText) {
-            edits.push({
-                range: {
-                    start: { line: i, character: 0 },
-                    end: { line: i, character: lines[i].length }
-                },
-                newText: newText
-            });
-        }
+        formattedLines.push(newText);
 
         indentLevel = currentIndent + opens - closes;
         indentLevel = Math.max(0, indentLevel);
     }
 
-    return edits;
+    const finalCode = formattedLines.join('\n');
+    if (finalCode === docText) {
+        return [];
+    }
+
+    return [{
+        range: {
+            start: { line: 0, character: 0 },
+            end: { line: lines.length, character: 0 }
+        },
+        newText: finalCode
+    }];
 });
 
 function getWordAt(line: string, pos: number): string | null {
