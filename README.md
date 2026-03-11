@@ -1,15 +1,19 @@
 # Vult Language Server & VSCode Extension
 
-This project provides a full Language Server (LSP) and a VSCode extension for the Vult DSP language.
+This project provides a full Language Server (LSP) and a VSCode extension for the Vult DSP language. It offers a professional IDE experience similar to `clangd` but specifically tailored for Vult developers.
 
 ## Features
 
 - **Syntax Highlighting**: Full syntax coloring for `.vult` files.
-- **Diagnostics**: Real-time compile errors and warnings.
-- **Code Completion**: Smart suggestions for keywords, types, and your own functions/variables.
-- **Go to Definition**: Jump to the source of any function or variable.
-- **Hover**: View signatures and details by hovering over code.
-- **Document Symbols**: Outline view of your code structure.
+- **Real-time Diagnostics**: Instant cross-file compile errors and warnings powered by the Vult compiler engine.
+- **Smart Code Completion**: Context-aware suggestions for Vult keywords, built-in types, and all user-defined functions/variables across your workspace.
+- **Go to Definition**: Jump to the source of any function, memory block, or variable—even if defined in another file.
+- **Hover Support**: View function signatures and variable types by simply hovering your mouse over them.
+- **Signature Help**: Interactive parameter hints that appear as you type function arguments, highlighting the current parameter.
+- **Workspace-wide Rename**: Rename a function or variable project-wide (`F2`), updating all references automatically.
+- **Find All References**: Quickly see every usage of a specific symbol across all your `.vult` files.
+- **Document Symbols**: A clean "Outline" view of your file's structure, including functions, types, and state variables.
+- **Intelligent Formatter**: A robust code formatter (`Shift+Alt+F`) that handles complex indentation, ignores braces inside strings/comments, and collapses consecutive empty lines for a cleaner codebase.
 
 ## Installation for VSCode
 
@@ -103,10 +107,6 @@ require'lspconfig'.configs.vult = {
 }
 require'lspconfig'.vult.setup{}
 ```
-
-## Moving to a separate repo
-
-This folder is self-contained. You can move the entire `vult-lsp` directory to a new Git repository at any time.
 
 ## Development
 
