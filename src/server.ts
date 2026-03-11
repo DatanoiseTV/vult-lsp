@@ -16,19 +16,44 @@ import {
     DocumentSymbol,
     SymbolKind,
     Range,
-    Position
+    Position,
+    RenameParams,
+    WorkspaceEdit,
+    TextEdit,
+    ReferenceParams,
+    SignatureHelpParams,
+    SignatureHelp,
+    SignatureInformation,
+    ParameterInformation,
+    DocumentFormattingParams,
+    DidChangeWatchedFilesParams
 } from 'vscode-languageserver/node';
 
 import {
     TextDocument
 } from 'vscode-languageserver-textdocument';
 
+import * as fs from 'fs';
+import * as path from 'path';
+import { URI } from 'vscode-uri';
+
+const fg = require('fast-glob');
 const vultlib = require('vultlib');
 
 const connection = createConnection(ProposedFeatures.all);
 const documents: TextDocuments<TextDocument> = new TextDocuments(TextDocument);
 
+let workspaceFolders: string[] = [];
+// Store raw code for all workspace files
+const workspaceFiles: Map<string, string> = new Map();
+// Store parsed symbols for all workspace files
+const workspaceSymbols: Map<string, DocumentSymbol[]> = new Map();
+
 connection.onInitialize((params: InitializeParams) => {
+    if (params.workspaceFolders) {
+        workspaceFolders = params.workspaceFolders.map(f => URI.parse(f.uri).fsPath);
+    }
+
     const result: InitializeResult = {
         capabilities: {
             textDocumentSync: TextDocumentSyncKind.Incremental,
@@ -37,35 +62,68 @@ connection.onInitialize((params: InitializeParams) => {
             },
             definitionProvider: true,
             hoverProvider: true,
-            documentSymbolProvider: true
+            documentSymbolProvider: true,
+            renameProvider: true,
+            referencesProvider: true,
+            signatureHelpProvider: {
+                triggerCharacters: ['(', ',']
+            },
+            documentFormattingProvider: true,
         }
     };
     return result;
 });
 
-documents.onDidChangeContent(change => {
-    validateTextDocument(change.document);
+connection.onInitialized(async () => {
+    // Scan the workspace for all `.vult` files
+    for (const folder of workspaceFolders) {
+        const files = await fg('**/*.vult', { cwd: folder, absolute: true });
+        for (const file of files) {
+            const uri = URI.file(file).toString();
+            try {
+                const code = fs.readFileSync(file, 'utf8');
+                workspaceFiles.set(uri, code);
+                workspaceSymbols.set(uri, extractSymbols(code));
+            } catch (e) {
+                connection.console.warn(`Failed to read file ${file}`);
+            }
+        }
+    }
 });
 
-// A simple cache for symbols in the document
-const documentSymbolsCache: Map<string, DocumentSymbol[]> = new Map();
-
-async function validateTextDocument(textDocument: TextDocument): Promise<void> {
-    const text = textDocument.getText();
-    const uri = textDocument.uri;
-    const filename = uri.replace("file://", "");
+documents.onDidChangeContent(change => {
+    const uri = change.document.uri;
+    const text = change.document.getText();
+    workspaceFiles.set(uri, text);
+    workspaceSymbols.set(uri, extractSymbols(text));
     
-    // 1. Run Vult Diagnostics
-    const diagnostics: Diagnostic[] = [];
+    validateWorkspace();
+});
+
+// A debouncer could be added here, but for simplicity we run immediately
+async function validateWorkspace(): Promise<void> {
+    const filesToCompile: any[] = [];
+    
+    // Pass all known workspace files to the compiler to resolve cross-file references
+    for (const [uri, code] of workspaceFiles.entries()) {
+        const filename = URI.parse(uri).fsPath;
+        filesToCompile.push({ file: filename, code });
+    }
+
+    if (filesToCompile.length === 0) return;
+
     try {
         const args = {
             check: true,
-            files: [
-                { file: filename, code: text }
-            ]
+            files: filesToCompile
         };
         
         const results = vultlib.main(args);
+        const diagnosticsMap = new Map<string, Diagnostic[]>();
+        
+        for (const uri of workspaceFiles.keys()) {
+            diagnosticsMap.set(uri, []);
+        }
         
         if (results && Array.isArray(results)) {
             for (const result of results) {
@@ -84,28 +142,41 @@ async function validateTextDocument(textDocument: TextDocument): Promise<void> {
                             message: err.msg,
                             source: 'vult'
                         };
-                        diagnostics.push(diagnostic);
+                        
+                        // Map the error back to the correct file URI
+                        const errFilename = err.file;
+                        let targetUri = "";
+                        for (const uri of workspaceFiles.keys()) {
+                            if (URI.parse(uri).fsPath === errFilename) {
+                                targetUri = uri;
+                                break;
+                            }
+                        }
+                        
+                        if (targetUri && diagnosticsMap.has(targetUri)) {
+                            diagnosticsMap.get(targetUri)!.push(diagnostic);
+                        }
                     }
                 }
             }
         }
+        
+        // Send diagnostics for all files
+        for (const [uri, diagnostics] of diagnosticsMap.entries()) {
+            connection.sendDiagnostics({ uri, diagnostics });
+        }
+        
     } catch (e: any) {
-        connection.console.error(`Error validating Vult: ${e.message}`);
+        connection.console.error(`Error validating Vult workspace: ${e.message}`);
     }
-    
-    connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
-
-    // 2. Extract Document Symbols using Regex (since AST isn't fully exposed by vultlib JS yet)
-    const symbols = extractSymbols(text);
-    documentSymbolsCache.set(uri, symbols);
 }
 
+// Pseudo AST Extractor via Regex
 function extractSymbols(text: string): DocumentSymbol[] {
     const symbols: DocumentSymbol[] = [];
     const lines = text.split(/\r?\n/);
 
-    // Basic regexes for Vult declarations
-    const funRegex = /^\\s*fun\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(([^)]*)\\)/;
+    const funRegex = /^\\s*(fun|and|external)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(([^)]*)\\)/;
     const valRegex = /^\\s*val\\s+([a-zA-Z_][a-zA-Z0-9_]*)/;
     const memRegex = /^\\s*mem\\s+([a-zA-Z_][a-zA-Z0-9_]*)/;
     const typeRegex = /^\\s*type\\s+([a-zA-Z_][a-zA-Z0-9_]*)/;
@@ -115,7 +186,7 @@ function extractSymbols(text: string): DocumentSymbol[] {
         
         let match = funRegex.exec(line);
         if (match) {
-            symbols.push(createSymbol(match[1], SymbolKind.Function, i, match.index, line, match[2] ? `(${match[2]})` : '()'));
+            symbols.push(createSymbol(match[2], SymbolKind.Function, i, match.index, line, match[3] ? `(${match[3]})` : '()'));
             continue;
         }
 
@@ -142,40 +213,34 @@ function extractSymbols(text: string): DocumentSymbol[] {
 }
 
 function createSymbol(name: string, kind: SymbolKind, line: number, character: number, text: string, detail: string): DocumentSymbol {
-    const range: Range = {
-        start: { line, character: 0 },
-        end: { line, character: text.length }
-    };
-    const selectionRange: Range = {
-        start: { line, character: text.indexOf(name) },
-        end: { line, character: text.indexOf(name) + name.length }
-    };
+    const selectionStart = text.indexOf(name);
     return {
         name,
         detail,
         kind,
-        range,
-        selectionRange
+        range: {
+            start: { line, character: 0 },
+            end: { line, character: text.length }
+        },
+        selectionRange: {
+            start: { line, character: selectionStart > -1 ? selectionStart : 0 },
+            end: { line, character: selectionStart > -1 ? selectionStart + name.length : name.length }
+        }
     };
 }
 
-// Hover Provider
-connection.onHover(
-    (params: TextDocumentPositionParams): Hover | null => {
-        const doc = documents.get(params.textDocument.uri);
-        if (!doc) return null;
+// Hover Provider (Searches all workspace symbols)
+connection.onHover((params: TextDocumentPositionParams): Hover | null => {
+    const docText = workspaceFiles.get(params.textDocument.uri);
+    if (!docText) return null;
 
-        const text = doc.getText();
-        const lines = text.split(/\r?\n/);
-        const line = lines[params.position.line];
-        
-        // Extract word at position
-        const wordMatch = getWordAt(line, params.position.character);
-        if (!wordMatch) return null;
+    const lines = docText.split(/\r?\n/);
+    const line = lines[params.position.line];
+    const wordMatch = getWordAt(line, params.position.character);
+    if (!wordMatch) return null;
 
-        const symbols = documentSymbolsCache.get(params.textDocument.uri) || [];
+    for (const symbols of workspaceSymbols.values()) {
         const symbol = symbols.find(s => s.name === wordMatch);
-
         if (symbol) {
             let signature = symbol.name;
             if (symbol.kind === SymbolKind.Function) signature = `fun ${symbol.name}${symbol.detail}`;
@@ -184,112 +249,233 @@ connection.onHover(
             else if (symbol.detail === 'type') signature = `type ${symbol.name}`;
 
             return {
-                contents: {
-                    language: 'vult',
-                    value: signature
-                }
+                contents: { language: 'vult', value: signature }
             };
         }
-
-        return null;
     }
-);
+    return null;
+});
 
-// Definition Provider
-connection.onDefinition(
-    (params: TextDocumentPositionParams): Location | null => {
-        const doc = documents.get(params.textDocument.uri);
-        if (!doc) return null;
+// Definition Provider (Searches all workspace symbols)
+connection.onDefinition((params: TextDocumentPositionParams): Location | null => {
+    const docText = workspaceFiles.get(params.textDocument.uri);
+    if (!docText) return null;
 
-        const text = doc.getText();
-        const lines = text.split(/\r?\n/);
-        const line = lines[params.position.line];
-        
-        const wordMatch = getWordAt(line, params.position.character);
-        if (!wordMatch) return null;
+    const lines = docText.split(/\r?\n/);
+    const wordMatch = getWordAt(lines[params.position.line], params.position.character);
+    if (!wordMatch) return null;
 
-        const symbols = documentSymbolsCache.get(params.textDocument.uri) || [];
+    for (const [uri, symbols] of workspaceSymbols.entries()) {
         const symbol = symbols.find(s => s.name === wordMatch);
-
         if (symbol) {
-            return {
-                uri: params.textDocument.uri,
-                range: symbol.selectionRange
-            };
+            return { uri, range: symbol.selectionRange };
         }
-
-        return null;
     }
-);
+    return null;
+});
 
 // Document Symbol Provider
-connection.onDocumentSymbol(
-    (params: DocumentSymbolParams): DocumentSymbol[] => {
-        return documentSymbolsCache.get(params.textDocument.uri) || [];
-    }
-);
+connection.onDocumentSymbol((params: DocumentSymbolParams): DocumentSymbol[] => {
+    return workspaceSymbols.get(params.textDocument.uri) || [];
+});
 
-// Completion Provider
-connection.onCompletion(
-    (textDocumentPosition: TextDocumentPositionParams): CompletionItem[] => {
-        const items: CompletionItem[] = [];
+// Completion Provider (Includes workspace-wide functions and types)
+connection.onCompletion((pos: TextDocumentPositionParams): CompletionItem[] => {
+    const items: CompletionItem[] = [];
+    const keywords = ['fun', 'mem', 'val', 'return', 'if', 'else', 'while', 'type', 'and', 'external'];
+    
+    keywords.forEach(kw => items.push({ label: kw, kind: CompletionItemKind.Keyword, data: 1 }));
+    ['real', 'int', 'bool'].forEach(t => items.push({ label: t, kind: CompletionItemKind.Class, data: 2 }));
 
-        // Vult Keywords
-        const keywords = ['fun', 'mem', 'val', 'return', 'if', 'else', 'while', 'type', 'and', 'external'];
-        keywords.forEach(kw => {
-            items.push({
-                label: kw,
-                kind: CompletionItemKind.Keyword,
-                data: 1
-            });
-        });
-
-        // Vult Built-in Types
-        const types = ['real', 'int', 'bool'];
-        types.forEach(t => {
-            items.push({
-                label: t,
-                kind: CompletionItemKind.Class,
-                data: 2
-            });
-        });
-
-        // Add Symbols from Document
-        const symbols = documentSymbolsCache.get(textDocumentPosition.textDocument.uri) || [];
+    const addedSymbols = new Set<string>();
+    for (const symbols of workspaceSymbols.values()) {
         symbols.forEach(sym => {
-            items.push({
-                label: sym.name,
-                kind: sym.kind === SymbolKind.Function ? CompletionItemKind.Function :
-                      sym.kind === SymbolKind.Variable ? CompletionItemKind.Variable :
-                      sym.kind === SymbolKind.Class ? CompletionItemKind.Class : CompletionItemKind.Text,
-                detail: sym.detail,
-                data: 3
-            });
+            if (!addedSymbols.has(sym.name)) {
+                addedSymbols.add(sym.name);
+                items.push({
+                    label: sym.name,
+                    kind: sym.kind === SymbolKind.Function ? CompletionItemKind.Function :
+                          sym.kind === SymbolKind.Variable ? CompletionItemKind.Variable :
+                          sym.kind === SymbolKind.Class ? CompletionItemKind.Class : CompletionItemKind.Text,
+                    detail: sym.detail,
+                    data: 3
+                });
+            }
         });
-
-        return items;
     }
-);
+    return items;
+});
 
-connection.onCompletionResolve(
-    (item: CompletionItem): CompletionItem => {
-        if (item.data === 1) {
-            item.detail = 'Vult Keyword';
-        } else if (item.data === 2) {
-            item.detail = 'Vult Type';
+connection.onCompletionResolve((item: CompletionItem): CompletionItem => {
+    if (item.data === 1) item.detail = 'Vult Keyword';
+    else if (item.data === 2) item.detail = 'Vult Type';
+    return item;
+});
+
+// Rename Provider
+connection.onRenameRequest((params: RenameParams): WorkspaceEdit | null => {
+    const docText = workspaceFiles.get(params.textDocument.uri);
+    if (!docText) return null;
+
+    const lines = docText.split(/\r?\n/);
+    const oldName = getWordAt(lines[params.position.line], params.position.character);
+    if (!oldName) return null;
+
+    const newName = params.newName;
+    const workspaceEdit: WorkspaceEdit = { changes: {} };
+
+    // Search and replace across all workspace files
+    for (const [uri, text] of workspaceFiles.entries()) {
+        const textEdits: TextEdit[] = [];
+        const fileLines = text.split(/\r?\n/);
+        
+        for (let i = 0; i < fileLines.length; i++) {
+            const line = fileLines[i];
+            let startIndex = 0;
+            let index;
+            // Simple word boundary replacement
+            const regex = new RegExp(`\\b${oldName}\\b`, 'g');
+            while ((index = regex.exec(line)) !== null) {
+                textEdits.push({
+                    range: {
+                        start: { line: i, character: index.index },
+                        end: { line: i, character: index.index + oldName.length }
+                    },
+                    newText: newName
+                });
+            }
         }
-        return item;
+        
+        if (textEdits.length > 0) {
+            workspaceEdit.changes![uri] = textEdits;
+        }
     }
-);
+
+    return workspaceEdit;
+});
+
+// References Provider
+connection.onReferences((params: ReferenceParams): Location[] => {
+    const docText = workspaceFiles.get(params.textDocument.uri);
+    if (!docText) return [];
+
+    const lines = docText.split(/\r?\n/);
+    const targetWord = getWordAt(lines[params.position.line], params.position.character);
+    if (!targetWord) return [];
+
+    const references: Location[] = [];
+
+    for (const [uri, text] of workspaceFiles.entries()) {
+        const fileLines = text.split(/\r?\n/);
+        for (let i = 0; i < fileLines.length; i++) {
+            const line = fileLines[i];
+            const regex = new RegExp(`\\b${targetWord}\\b`, 'g');
+            let match;
+            while ((match = regex.exec(line)) !== null) {
+                references.push({
+                    uri,
+                    range: {
+                        start: { line: i, character: match.index },
+                        end: { line: i, character: match.index + targetWord.length }
+                    }
+                });
+            }
+        }
+    }
+
+    return references;
+});
+
+// Signature Help Provider
+connection.onSignatureHelp((params: SignatureHelpParams): SignatureHelp | null => {
+    const docText = workspaceFiles.get(params.textDocument.uri);
+    if (!docText) return null;
+
+    const lines = docText.split(/\r?\n/);
+    const line = lines[params.position.line].substring(0, params.position.character);
+    
+    // Reverse find the function name being called
+    const match = /([a-zA-Z_][a-zA-Z0-9_]*)\s*\([^)]*$/.exec(line);
+    if (!match) return null;
+
+    const funcName = match[1];
+    
+    // Find the symbol definition
+    let targetSymbol: DocumentSymbol | null = null;
+    for (const symbols of workspaceSymbols.values()) {
+        targetSymbol = symbols.find(s => s.name === funcName && s.kind === SymbolKind.Function) || null;
+        if (targetSymbol) break;
+    }
+
+    if (targetSymbol && targetSymbol.detail) {
+        // Extract args from detail, e.g. "(x, y, z)"
+        const argsStr = targetSymbol.detail.replace(/[()]/g, '');
+        const args = argsStr.split(',').map(a => a.trim()).filter(a => a.length > 0);
+        
+        const paramsInfo: ParameterInformation[] = args.map(arg => ({ label: arg }));
+        
+        // Count commas to determine active parameter
+        const commas = (line.match(/,/g) || []).length;
+
+        return {
+            signatures: [{
+                label: `${funcName}(${argsStr})`,
+                parameters: paramsInfo
+            }],
+            activeSignature: 0,
+            activeParameter: Math.min(commas, Math.max(0, args.length - 1))
+        };
+    }
+
+    return null;
+});
+
+// Basic Code Formatter (Auto-indentation based on braces)
+connection.onDocumentFormatting((params: DocumentFormattingParams): TextEdit[] => {
+    const docText = workspaceFiles.get(params.textDocument.uri);
+    if (!docText) return [];
+
+    const lines = docText.split(/\r?\n/);
+    const edits: TextEdit[] = [];
+    let indentLevel = 0;
+    const tabSize = params.options.tabSize;
+    const insertSpaces = params.options.insertSpaces;
+    const indentChar = insertSpaces ? ' '.repeat(tabSize) : '\t';
+
+    for (let i = 0; i < lines.length; i++) {
+        let line = lines[i].trim();
+        
+        // Decrease indent if line closes a block
+        if (line.startsWith('}')) {
+            indentLevel = Math.max(0, indentLevel - 1);
+        }
+
+        const newText = (indentLevel > 0 ? indentChar.repeat(indentLevel) : '') + line;
+        
+        if (lines[i] !== newText && (lines[i].trim() !== '' || newText !== '')) {
+            edits.push({
+                range: {
+                    start: { line: i, character: 0 },
+                    end: { line: i, character: lines[i].length }
+                },
+                newText: newText
+            });
+        }
+
+        // Increase indent if line opens a block
+        if (line.endsWith('{')) {
+            indentLevel++;
+        }
+    }
+
+    return edits;
+});
 
 function getWordAt(line: string, pos: number): string | null {
-    // Basic identifier matching backwards and forwards
     let start = pos;
     while (start > 0 && /[a-zA-Z0-9_]/.test(line[start - 1])) start--;
-    
     let end = pos;
     while (end < line.length && /[a-zA-Z0-9_]/.test(line[end])) end++;
-    
     if (start === end) return null;
     return line.substring(start, end);
 }
