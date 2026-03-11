@@ -243,7 +243,9 @@ function createSymbol(name: string, kind: SymbolKind, line: number, character: n
 
 // Hover Provider (Searches all workspace symbols)
 connection.onHover((params: TextDocumentPositionParams): Hover | null => {
-    const docText = workspaceFiles.get(params.textDocument.uri);
+    const uri = params.textDocument.uri;
+    const doc = documents.get(uri);
+    const docText = doc ? doc.getText() : workspaceFiles.get(uri);
     if (!docText) return null;
 
     const lines = docText.split(/\r?\n/);
@@ -251,36 +253,56 @@ connection.onHover((params: TextDocumentPositionParams): Hover | null => {
     const wordMatch = getWordAt(line, params.position.character);
     if (!wordMatch) return null;
 
-    for (const symbols of workspaceSymbols.values()) {
-        const symbol = symbols.find(s => s.name === wordMatch);
-        if (symbol) {
-            let signature = symbol.name;
-            if (symbol.kind === SymbolKind.Function) signature = `fun ${symbol.name}${symbol.detail}`;
-            else if (symbol.detail === 'val') signature = `val ${symbol.name}`;
-            else if (symbol.detail === 'mem') signature = `mem ${symbol.name}`;
-            else if (symbol.detail === 'type') signature = `type ${symbol.name}`;
+    // Search local first
+    const localSymbols = workspaceSymbols.get(uri) || (doc ? extractSymbols(docText) : []);
+    let symbol = localSymbols.find(s => s.name === wordMatch);
 
-            return {
-                contents: { language: 'vult', value: signature }
-            };
+    if (!symbol) {
+        for (const [otherUri, symbols] of workspaceSymbols.entries()) {
+            if (otherUri === uri) continue;
+            symbol = symbols.find(s => s.name === wordMatch);
+            if (symbol) break;
         }
+    }
+
+    if (symbol) {
+        let signature = symbol.name;
+        if (symbol.kind === SymbolKind.Function) signature = `fun ${symbol.name}${symbol.detail}`;
+        else if (symbol.detail === 'val') signature = `val ${symbol.name}`;
+        else if (symbol.detail === 'mem') signature = `mem ${symbol.name}`;
+        else if (symbol.detail === 'type') signature = `type ${symbol.name}`;
+
+        return {
+            contents: { language: 'vult', value: signature }
+        };
     }
     return null;
 });
 
 // Definition Provider (Searches all workspace symbols)
 connection.onDefinition((params: TextDocumentPositionParams): Location | null => {
-    const docText = workspaceFiles.get(params.textDocument.uri);
+    const uri = params.textDocument.uri;
+    const doc = documents.get(uri);
+    const docText = doc ? doc.getText() : workspaceFiles.get(uri);
     if (!docText) return null;
 
     const lines = docText.split(/\r?\n/);
     const wordMatch = getWordAt(lines[params.position.line], params.position.character);
     if (!wordMatch) return null;
 
-    for (const [uri, symbols] of workspaceSymbols.entries()) {
+    // 1. Search the current document first!
+    const localSymbols = workspaceSymbols.get(uri) || (doc ? extractSymbols(docText) : []);
+    const localSymbol = localSymbols.find(s => s.name === wordMatch);
+    if (localSymbol) {
+        return { uri, range: localSymbol.selectionRange };
+    }
+
+    // 2. Search other documents
+    for (const [otherUri, symbols] of workspaceSymbols.entries()) {
+        if (otherUri === uri) continue;
         const symbol = symbols.find(s => s.name === wordMatch);
         if (symbol) {
-            return { uri, range: symbol.selectionRange };
+            return { uri: otherUri, range: symbol.selectionRange };
         }
     }
     return null;
@@ -400,7 +422,9 @@ connection.onReferences((params: ReferenceParams): Location[] => {
 
 // Signature Help Provider
 connection.onSignatureHelp((params: SignatureHelpParams): SignatureHelp | null => {
-    const docText = workspaceFiles.get(params.textDocument.uri);
+    const uri = params.textDocument.uri;
+    const doc = documents.get(uri);
+    const docText = doc ? doc.getText() : workspaceFiles.get(uri);
     if (!docText) return null;
 
     const lines = docText.split(/\r?\n/);
@@ -412,11 +436,17 @@ connection.onSignatureHelp((params: SignatureHelpParams): SignatureHelp | null =
 
     const funcName = match[1];
     
-    // Find the symbol definition
-    let targetSymbol: DocumentSymbol | null = null;
-    for (const symbols of workspaceSymbols.values()) {
-        targetSymbol = symbols.find(s => s.name === funcName && s.kind === SymbolKind.Function) || null;
-        if (targetSymbol) break;
+    // 1. Search the current document first!
+    const localSymbols = workspaceSymbols.get(uri) || (doc ? extractSymbols(docText) : []);
+    let targetSymbol = localSymbols.find(s => s.name === funcName && s.kind === SymbolKind.Function) || null;
+
+    // 2. Search other documents if not found locally
+    if (!targetSymbol) {
+        for (const [otherUri, symbols] of workspaceSymbols.entries()) {
+            if (otherUri === uri) continue;
+            targetSymbol = symbols.find(s => s.name === funcName && s.kind === SymbolKind.Function) || null;
+            if (targetSymbol) break;
+        }
     }
 
     if (targetSymbol && targetSymbol.detail) {
