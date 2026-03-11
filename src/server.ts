@@ -194,7 +194,7 @@ function extractSymbols(text: string): DocumentSymbol[] {
 
         match = valRegex.exec(line);
         if (match) {
-            const vars = match[2].split(',').map(s => s.trim().split(/\s/)[0]);
+            const vars = match[2].split(',').map(s => s.trim().split(/\s/)[0].replace(/:.*$/, ''));
             vars.forEach(v => {
                 if (v && /[a-zA-Z_]/.test(v)) {
                     symbols.push(createSymbol(v, SymbolKind.Variable, i, match!.index, line, match![1]));
@@ -205,7 +205,7 @@ function extractSymbols(text: string): DocumentSymbol[] {
 
         match = memRegex.exec(line);
         if (match) {
-            const vars = match[1].split(',').map(s => s.trim().split(/\s/)[0]);
+            const vars = match[1].split(',').map(s => s.trim().split(/\s/)[0].replace(/:.*$/, ''));
             vars.forEach(v => {
                 if (v && /[a-zA-Z_]/.test(v)) {
                     symbols.push(createSymbol(v, SymbolKind.Variable, i, match!.index, line, 'mem'));
