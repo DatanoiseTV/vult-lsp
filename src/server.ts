@@ -176,29 +176,41 @@ function extractSymbols(text: string): DocumentSymbol[] {
     const symbols: DocumentSymbol[] = [];
     const lines = text.split(/\r?\n/);
 
-    const funRegex = /^\\s*(fun|and|external)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(([^)]*)\\)/;
-    const valRegex = /^\\s*val\\s+([a-zA-Z_][a-zA-Z0-9_]*)/;
-    const memRegex = /^\\s*mem\\s+([a-zA-Z_][a-zA-Z0-9_]*)/;
-    const typeRegex = /^\\s*type\\s+([a-zA-Z_][a-zA-Z0-9_]*)/;
+    const funRegex = /^\s*(fun|and|external)\s+([a-zA-Z_][a-zA-Z0-9_.]*)\s*\(([^)]*)\)/;
+    const valRegex = /^\s*(val|table)\s+([^;=]+)/;
+    const memRegex = /^\s*mem\s+([^;=]+)/;
+    const typeRegex = /^\s*type\s+([a-zA-Z_][a-zA-Z0-9_]*)/;
 
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         
         let match = funRegex.exec(line);
         if (match) {
-            symbols.push(createSymbol(match[2], SymbolKind.Function, i, match.index, line, match[3] ? `(${match[3]})` : '()'));
+            const fullName = match[2];
+            const shortName = fullName.split('.').pop() || fullName;
+            symbols.push(createSymbol(shortName, SymbolKind.Function, i, match.index, line, match[3] ? `(${match[3]})` : '()'));
             continue;
         }
 
         match = valRegex.exec(line);
         if (match) {
-            symbols.push(createSymbol(match[1], SymbolKind.Variable, i, match.index, line, 'val'));
+            const vars = match[2].split(',').map(s => s.trim().split(/\s/)[0]);
+            vars.forEach(v => {
+                if (v && /[a-zA-Z_]/.test(v)) {
+                    symbols.push(createSymbol(v, SymbolKind.Variable, i, match!.index, line, match![1]));
+                }
+            });
             continue;
         }
 
         match = memRegex.exec(line);
         if (match) {
-            symbols.push(createSymbol(match[1], SymbolKind.Variable, i, match.index, line, 'mem'));
+            const vars = match[1].split(',').map(s => s.trim().split(/\s/)[0]);
+            vars.forEach(v => {
+                if (v && /[a-zA-Z_]/.test(v)) {
+                    symbols.push(createSymbol(v, SymbolKind.Variable, i, match!.index, line, 'mem'));
+                }
+            });
             continue;
         }
 
