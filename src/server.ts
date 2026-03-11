@@ -474,27 +474,84 @@ connection.onSignatureHelp((params: SignatureHelpParams): SignatureHelp | null =
 
 // Basic Code Formatter (Auto-indentation based on braces)
 connection.onDocumentFormatting((params: DocumentFormattingParams): TextEdit[] => {
-    const docText = workspaceFiles.get(params.textDocument.uri);
+    const uri = params.textDocument.uri;
+    const doc = documents.get(uri);
+    const docText = doc ? doc.getText() : workspaceFiles.get(uri);
     if (!docText) return [];
 
     const lines = docText.split(/\r?\n/);
     const edits: TextEdit[] = [];
     let indentLevel = 0;
+    let inBlockComment = false;
     const tabSize = params.options.tabSize;
     const insertSpaces = params.options.insertSpaces;
     const indentChar = insertSpaces ? ' '.repeat(tabSize) : '\t';
 
     for (let i = 0; i < lines.length; i++) {
         let line = lines[i].trim();
-        
-        // Decrease indent if line closes a block
-        if (line.startsWith('}')) {
-            indentLevel = Math.max(0, indentLevel - 1);
+
+        if (line === '') {
+            if (lines[i].length > 0) {
+                edits.push({
+                    range: {
+                        start: { line: i, character: 0 },
+                        end: { line: i, character: lines[i].length }
+                    },
+                    newText: ''
+                });
+            }
+            continue;
         }
 
-        const newText = (indentLevel > 0 ? indentChar.repeat(indentLevel) : '') + line;
+        let cleanLine = line;
+
+        if (inBlockComment) {
+            let endIdx = cleanLine.indexOf('*/');
+            if (endIdx !== -1) {
+                inBlockComment = false;
+                cleanLine = cleanLine.substring(endIdx + 2);
+            } else {
+                cleanLine = '';
+            }
+        }
+
+        if (!inBlockComment) {
+            cleanLine = cleanLine.replace(/\/\/.*$/, '');
+            cleanLine = cleanLine.replace(/"(?:[^"\\]|\\.)*"/g, '');
+
+            while (cleanLine.indexOf('/*') !== -1) {
+                let startIdx = cleanLine.indexOf('/*');
+                let endIdx = cleanLine.indexOf('*/', startIdx + 2);
+                if (endIdx !== -1) {
+                    cleanLine = cleanLine.substring(0, startIdx) + cleanLine.substring(endIdx + 2);
+                } else {
+                    inBlockComment = true;
+                    cleanLine = cleanLine.substring(0, startIdx);
+                    break;
+                }
+            }
+        }
+
+        cleanLine = cleanLine.trim();
         
-        if (lines[i] !== newText && (lines[i].trim() !== '' || newText !== '')) {
+        let opens = (cleanLine.match(/\{/g) || []).length;
+        let closes = (cleanLine.match(/\}/g) || []).length;
+
+        const startsWithClose = /^[}\]]/.test(cleanLine);
+        
+        let currentIndent = indentLevel;
+        if (startsWithClose) {
+            currentIndent = Math.max(0, currentIndent - 1);
+            closes--; 
+        }
+
+        let newText = (currentIndent > 0 ? indentChar.repeat(currentIndent) : '') + line;
+        
+        if (inBlockComment && line.startsWith('*')) {
+            newText = ' ' + newText;
+        }
+
+        if (lines[i] !== newText) {
             edits.push({
                 range: {
                     start: { line: i, character: 0 },
@@ -504,10 +561,8 @@ connection.onDocumentFormatting((params: DocumentFormattingParams): TextEdit[] =
             });
         }
 
-        // Increase indent if line opens a block
-        if (line.endsWith('{')) {
-            indentLevel++;
-        }
+        indentLevel = currentIndent + opens - closes;
+        indentLevel = Math.max(0, indentLevel);
     }
 
     return edits;
